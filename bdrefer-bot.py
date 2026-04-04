@@ -241,4 +241,4 @@ async def main():
     executor.start_polling(dp, skip_updates=True)
 
 if __name__ == '__main__':
-    asyncio.run(main())
+    start_bot()
