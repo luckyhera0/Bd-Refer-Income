@@ -6,20 +6,18 @@ import asyncio
 import os
 from flask import Flask
 from threading import Thread
-from aiogram import Bot, Dispatcher, types
+from aiogram import Bot, Dispatcher, types, executor
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
 from aiogram.dispatcher import FSMContext
 from aiogram.dispatcher.filters.state import State, StatesGroup
 from aiogram.contrib.fsm_storage.memory import MemoryStorage
 
-# --- ১. Render Server Keep-Alive (সার্ভার সচল রাখার জন্য) ---
+# --- ১. Render Server Keep-Alive ---
 app = Flask('')
 @app.route('/')
-def home(): 
-    return "LuckyHera Referral Bot is Running..."
+def home(): return "Server is Running..."
 
 def run():
-    # Render-এর দেওয়া পোর্ট অটোমেটিক ধরবে
     port = int(os.environ.get("PORT", 8080))
     app.run(host='0.0.0.0', port=port)
 
@@ -29,7 +27,6 @@ def keep_alive():
     t.start()
 
 # --- ২. কনফিগারেশন (সুরক্ষিত পদ্ধতি) ---
-# টোকেন ও আইডিগুলো এখন সরাসরি সার্ভার থেকে লোড হবে
 API_TOKEN = os.getenv('BOT_TOKEN') 
 ADMIN_ID = int(os.getenv('ADMIN_ID', '0')) 
 PAYMENT_NUMBER = os.getenv('PAYMENT_NUMBER', '01753850929') 
@@ -41,7 +38,7 @@ bot = Bot(token=API_TOKEN)
 dp = Dispatcher(bot, storage=storage)
 logging.basicConfig(level=logging.INFO)
 
-# --- ৩. স্টেট ম্যানেজমেন্ট (FSM) ---
+# --- ৩. স্টেট ম্যানেজমেন্ট ---
 class Form(StatesGroup):
     waiting_for_pay_num = State()   
     waiting_for_trx_id = State()    
@@ -51,7 +48,7 @@ class Form(StatesGroup):
     waiting_for_private_msg_id = State()
     waiting_for_private_msg_text = State()
 
-# সংখ্যা বাংলায় রূপান্তর
+# --- ৪. সংখ্যা বাংলায় রূপান্তর ---
 def bn_num(number):
     try:
         number = str(int(float(number))) 
@@ -59,7 +56,7 @@ def bn_num(number):
         return ''.join(en_to_bn.get(char, char) for char in number)
     except: return "০"
 
-# --- ৪. ডাটাবেস ফাংশন ---
+# --- ৫. ডাটাবেস ফাংশন ---
 def get_db():
     conn = sqlite3.connect('bot_data.db', check_same_thread=False)
     cursor = conn.cursor()
@@ -73,7 +70,7 @@ def get_db():
     conn.commit()
     return conn
 
-# --- ৫. মেনু কিবোর্ডস ---
+# --- ৬. কিবোর্ড মেনু ---
 def main_menu():
     keyboard = ReplyKeyboardMarkup(resize_keyboard=True)
     keyboard.row(KeyboardButton("ℹ️ ইনকাম তথ্য"))
@@ -88,7 +85,7 @@ def admin_menu():
     keyboard.row(KeyboardButton("📜 পেমেন্ট রিপোর্ট"))
     return keyboard
 
-# --- ৬. স্টার্ট ও অ্যাডমিন কমান্ড ---
+# --- ৭. স্টার্ট ও অ্যাডমিন কমান্ড ---
 @dp.message_handler(commands=['start', 'admin'], state="*")
 async def start_command(message: types.Message, state: FSMContext):
     await state.finish()
@@ -131,7 +128,7 @@ async def start_command(message: types.Message, state: FSMContext):
     else:
         await message.answer(f"✅ স্বাগতম সম্মানিত সদস্য {user[1]}!", reply_markup=main_menu())
 
-# --- ৭. কলব্যাক হ্যান্ডেলার ---
+# --- ৮. কলব্যাক হ্যান্ডলার ---
 @dp.callback_query_handler(lambda c: True, state="*")
 async def process_callbacks(call: types.CallbackQuery, state: FSMContext):
     act_data = call.data.split('_')
@@ -171,7 +168,7 @@ async def process_callbacks(call: types.CallbackQuery, state: FSMContext):
 
     conn.commit(); conn.close()
 
-# --- ৮. পেমেন্ট সাবমিশন (FSM) ---
+# --- ৯. FSM মেথড হ্যান্ডলার ---
 @dp.message_handler(state=Form.waiting_for_pay_num)
 async def get_pay_num(message: types.Message, state: FSMContext):
     await state.update_data(n=message.text); await Form.waiting_for_trx_id.set()
@@ -188,7 +185,7 @@ async def get_trx(message: types.Message, state: FSMContext):
     await message.answer("⌛ তথ্য জমা হয়েছে। যাচাই শেষে সক্রিয় করা হবে।", reply_markup=types.ReplyKeyboardRemove())
     await state.finish()
 
-# --- ৯. ইউজার বাটন হ্যান্ডেলার ---
+# --- ১০. ইউজার মেনু লজিক ---
 @dp.message_handler(state=None)
 async def user_main_logic(message: types.Message):
     user_id = message.from_user.id
@@ -232,12 +229,14 @@ async def user_main_logic(message: types.Message):
     elif "📞 কাস্টমার সাপোর্ট" in message.text:
         await message.answer(f"👨‍💻 অ্যাডমিন আইডি: {ADMIN_USERNAME}")
 
-# --- ১০. মেইন রানার ---
-async def main():
-    await bot.delete_webhook(drop_pending_updates=True)
+# --- ১১. মেইন রানার (FIXED) ---
+def start_bot():
     keep_alive()
-    from aiogram import executor
-    # aiogram এর স্ট্যান্ডার্ড মেথডে রান করা হচ্ছে
+    loop = asyncio.get_event_loop()
+    try:
+        loop.run_until_complete(bot.delete_webhook(drop_pending_updates=True))
+    except:
+        pass
     executor.start_polling(dp, skip_updates=True)
 
 if __name__ == '__main__':
