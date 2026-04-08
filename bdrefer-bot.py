@@ -7,114 +7,248 @@ import requests
 from flask import Flask
 from threading import Thread
 from aiogram import Bot, Dispatcher, types, executor
-from aiogram.contrib.fsm_storage.memory import MemoryStorage
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
 from aiogram.dispatcher import FSMContext
 from aiogram.dispatcher.filters.state import State, StatesGroup
+from aiogram.contrib.fsm_storage.memory import MemoryStorage
 
-# --- সার্ভার সেটআপ ---
+# --- ১. সার্ভার কিপ-অ্যালাইভ ---
 app = Flask('')
 @app.route('/')
-def home(): return "Bot is Online!"
+def home(): return "LuckyHera Bot is Online!"
 
 def run():
-    app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 8080)))
+    port = int(os.environ.get("PORT", 8080))
+    app.run(host='0.0.0.0', port=port)
 
 def keep_alive():
     t = Thread(target=run)
     t.daemon = True
     t.start()
 
-# --- কনফিগারেশন ---
+# --- ২. কনফিগারেশন ---
 API_TOKEN = os.getenv('BOT_TOKEN') 
 ADMIN_ID = int(os.getenv('ADMIN_ID', '0')) 
 PAYMENT_NUMBER = os.getenv('PAYMENT_NUMBER', '01753850929') 
+ADMIN_USERNAME = os.getenv('ADMIN_USERNAME', '@luckyhera0')
 FIREBASE_URL = "https://bdrefer-bot-default-rtdb.asia-southeast1.firebasedatabase.app"
+MIN_WITHDRAW = 150 
 
+storage = MemoryStorage()
 bot = Bot(token=API_TOKEN, parse_mode="HTML")
-dp = Dispatcher(bot, storage=MemoryStorage())
+dp = Dispatcher(bot, storage=storage)
 logging.basicConfig(level=logging.INFO)
 
+# --- ৩. ডাটাবেজ হেল্পার ---
+def fb_get(path):
+    r = requests.get(f"{FIREBASE_URL}/{path}.json")
+    return r.json()
+
+def fb_put(path, data):
+    requests.put(f"{FIREBASE_URL}/{path}.json", json=data)
+
+def fb_update(path, data):
+    requests.patch(f"{FIREBASE_URL}/{path}.json", json=data)
+
+def bn_num(number):
+    try:
+        num_str = str(int(float(number)))
+        en_to_bn = {'0':'০', '1':'১', '2':'২', '3':'৩', '4':'৪', '5':'৫', '6':'৬', '7':'৭', '8':'৮', '9':'৯'}
+        return ''.join(en_to_bn.get(char, char) for char in num_str)
+    except: return "০"
+
+# --- ৪. স্টেট ম্যানেজমেন্ট ---
 class Form(StatesGroup):
-    waiting_for_notice = State()
-    waiting_for_task = State()
+    waiting_for_pay_num = State()   
+    waiting_for_trx_id = State()
+    waiting_for_withdraw_num = State()
+    waiting_for_notice = State()      
 
-def fb_get(path): return requests.get(f"{FIREBASE_URL}/{path}.json").json()
-def fb_update(path, data): requests.patch(f"{FIREBASE_URL}/{path}.json", json=data)
+# --- ৫. কিবোর্ড মেনু ---
+def main_menu():
+    keyboard = ReplyKeyboardMarkup(resize_keyboard=True)
+    keyboard.row(KeyboardButton("📊 আমার প্রোফাইল"), KeyboardButton("💸 টাকা উত্তোলন"))
+    keyboard.row(KeyboardButton("🎁 ডেইলি বোনাস"), KeyboardButton("🔄 কয়েন কনভার্ট"))
+    keyboard.row(KeyboardButton("ℹ️ ইনকাম তথ্য"), KeyboardButton("📞 কাস্টমার সাপোর্ট"))
+    return keyboard
 
-def main_kb():
-    kb = ReplyKeyboardMarkup(resize_keyboard=True)
-    kb.row("📊 আমার প্রোফাইল", "💸 টাকা উত্তোলন")
-    kb.row("🎁 ডেইলি বোনাস", "🔄 কয়েন কনভার্ট")
-    kb.row("ℹ️ ইনকাম তথ্য", "📞 কাস্টমার সাপোর্ট")
-    return kb
+def admin_keyboard():
+    keyboard = ReplyKeyboardMarkup(resize_keyboard=True)
+    keyboard.row(KeyboardButton("📊 ড্যাশবোর্ড"), KeyboardButton("📢 আপডেট পাঠান"))
+    keyboard.row(KeyboardButton("🏠 মেইন মেনু"))
+    return keyboard
 
-def admin_kb():
-    kb = ReplyKeyboardMarkup(resize_keyboard=True)
-    kb.row("📊 ড্যাশবোর্ড", "📢 আপডেট পাঠান", "🏠 মেইন মেনু")
-    return kb
-
-# --- অ্যাডমিন নোটিশ ও টাস্ক হ্যান্ডলার ---
+# --- ৬. অ্যাডমিন প্যানেল (শুধুমাত্র নোটিশ) ---
 @dp.message_handler(lambda m: m.from_user.id == ADMIN_ID, commands=['admin'], state="*")
-async def adm(m: types.Message, state: FSMContext):
+async def admin_panel(message: types.Message, state: FSMContext):
     await state.finish()
-    await m.answer("🛠 অ্যাডমিন মোড", reply_markup=admin_kb())
+    await message.answer("🛠 <b>অ্যাডমিন কন্ট্রোল প্যানেল।</b>", reply_markup=admin_keyboard())
 
 @dp.message_handler(lambda m: m.from_user.id == ADMIN_ID, state="*")
-async def adm_logic(m: types.Message, state: FSMContext):
-    if m.text == "📢 আপডেট পাঠান":
-        sub = ReplyKeyboardMarkup(resize_keyboard=True).row("📝 সাধারণ নোটিশ", "🎯 নতুন টাস্ক").add("🔙 পিছনে যান")
-        await m.answer("কি পাঠাতে চান?", reply_markup=sub)
-    elif m.text == "📝 সাধারণ নোটিশ":
+async def admin_logic(message: types.Message, state: FSMContext):
+    if "📢 আপডেট পাঠান" in message.text:
         await Form.waiting_for_notice.set()
-        await m.answer("📝 নোটিশটি লিখুন:")
-    elif m.text == "🎯 নতুন টাস্ক":
-        await Form.waiting_for_task.set()
-        await m.answer("🎯 টাস্কের বিবরণ দিন (১০ কয়েন রিওয়ার্ড):")
-    elif m.text == "🏠 মেইন মেনু":
-        await m.answer("🏠 ইউজার মেনু", reply_markup=main_kb())
-    # ... বাকি লজিক ...
+        await message.answer("📝 একটি নোটিশ লিখুন যা সবার কাছে পৌঁছাবে:")
+
+    elif "📊 ড্যাশবোর্ড" in message.text:
+        users = fb_get("users") or {}
+        active = sum(1 for u in users.values() if u.get('status')=='active')
+        msg = f"📊 <b>লাইভ ড্যাশবোর্ড</b>\n👥 মোট ইউজার: {bn_num(len(users))}\n✅ একটিভ ইউজার: {bn_num(active)}"
+        await message.answer(msg)
+
+    elif "🏠 মেইন মেনু" in message.text:
+        await message.answer("🏠 মেইন মেনু", reply_markup=main_menu())
+    
+    else:
+        await user_panel_logic(message, state)
 
 @dp.message_handler(state=Form.waiting_for_notice)
-async def send_n(m: types.Message, state: FSMContext):
+async def process_notice(message: types.Message, state: FSMContext):
+    notice_text = message.text
     await state.finish()
     users = fb_get("users") or {}
-    await m.answer("⏳ পাঠানো হচ্ছে...")
-    for u in users:
-        try: await bot.send_message(u, f"📢 <b>নোটিশ:</b>\n\n{m.text}")
+    await message.answer("⏳ নোটিশ পাঠানো হচ্ছে...")
+    count = 0
+    for uid in users:
+        try:
+            await bot.send_message(uid, f"📢 <b>নতুন আপডেট:</b>\n\n{notice_text}")
+            count += 1
+            await asyncio.sleep(0.05)
         except: pass
-    await m.answer("✅ সফল!", reply_markup=admin_kb())
+    await message.answer(f"✅ সফলভাবে {bn_num(count)} জনের কাছে নোটিশ পাঠানো হয়েছে।", reply_markup=admin_keyboard())
 
-@dp.message_handler(state=Form.waiting_for_task)
-async def send_t(m: types.Message, state: FSMContext):
-    await state.finish()
-    users = fb_get("users") or {}
-    tid = datetime.datetime.now().strftime("%H%M")
-    kb = InlineKeyboardMarkup().add(InlineKeyboardButton("✅ সম্পন্ন (১০ কয়েন)", callback_data=f"done_{tid}"))
-    for u in users:
-        try: await bot.send_message(u, f"🎯 <b>টাস্ক:</b>\n\n{m.text}", reply_markup=kb)
-        except: pass
-    await m.answer("✅ টাস্ক পাঠানো হয়েছে।", reply_markup=admin_kb())
-
-# --- প্রোফাইল ও ইনকাম লজিক ---
-@dp.message_handler()
-async def user_m(m: types.Message):
-    uid = str(m.from_user.id)
+# --- ৭. ইউজার প্যানেল ও কনভার্ট লজিক ---
+async def user_panel_logic(message: types.Message, state: FSMContext):
+    uid = str(message.from_user.id)
     u = fb_get(f"users/{uid}")
     if not u or u.get('status') == 'pending': return
 
-    if m.text == "📊 আমার প্রোফাইল":
-        me = await bot.get_me()
-        msg = f"📊 <b>প্রোফাইল</b>\n💰 ব্যালেন্স: {u['balance']} টাকা\n🎯 কয়েন: {u['coins']}\n🔗 https://t.me/{me.username}?start={uid}"
-        await m.answer(msg)
-    
-    elif m.text == "🔄 কয়েন কনভার্ট":
-        c = u.get('coins', 0)
-        if c < 6000: await m.answer("❌ ৫০০০ কয়েন লেভেলের জন্য রেখে বাকিটুকু কনভার্ট করতে পারবেন (কমপক্ষে ৬০০০ লাগবে)।")
+    if "📊 আমার প্রোফাইল" in message.text:
+        bot_info = await bot.get_me()
+        ref_link = f"https://t.me/{bot_info.username}?start={uid}"
+        msg = (f"📊 <b>আপনার প্রোফাইল</b>\n━━━━━━━━━━━━━━\n👤 নাম: {u['name']}\n🆔 আইডি: <code>{uid}</code>\n"
+               f"💰 ব্যালেন্স: {bn_num(u['balance'])} টাকা\n🎯 কয়েন: {bn_num(u['coins'])}\n"
+               f"👥 মোট রেফার: {bn_num(u['total_refer'])} জন\n━━━━━━━━━━━━━━\n"
+               f"🔗 <b>রেফার লিংক:</b>\n{ref_link}")
+        await message.answer(msg)
+
+    elif "🔄 কয়েন কনভার্ট" in message.text:
+        current_coins = u.get('coins', 0)
+        if current_coins < 6000:
+            await message.answer("❌ আপনার একাউন্টে ৫০০০ কয়েন লেভেল বোনাসের জন্য জমা থাকা বাধ্যতামূলক। ৫০০০ এর উপরে প্রতি ১০০০ কয়েন হলে ১০ টাকা কনভার্ট করতে পারবেন।")
         else:
-            conv = (c - 5000) // 1000 * 1000
-            money = (conv // 1000) * 10
-            fb_update(f"users/{uid}", {"balance": u['balance']+money, "coins": c-conv})
-            await m.answer(f"✅ {conv} কয়েন = {money} টাকা জমা হয়েছে।")
+            convertible = (current_coins - 5000) // 1000 * 1000
+            money = (convertible // 1000) * 10
+            fb_update(f"users/{uid}", {
+                "balance": u['balance'] + money, 
+                "coins": current_coins - convertible,
+                "total_earned": u.get('total_earned', 0.0) + money
+            })
+            await message.answer(f"✅ {bn_num(convertible)} কয়েন কনভার্ট করে {bn_num(money)} টাকা ব্যালেন্সে যোগ করা হয়েছে।")
+
+    elif "ℹ️ ইনকাম তথ্য" in message.text:
+        info = (
+            "ℹ️ <b>ইনকাম ও লেভেল সিস্টেম</b>\n"
+            "━━━━━━━━━━━━━━━━━━\n"
+            "💰 <b>রেফার ইনকাম:</b>\n"
+            "• ০-২৯৯৯ কয়েন: ২০ টাকা + ১৫০ কয়েন।\n"
+            "• ৩০০০-৪৯৯৯ কয়েন: ২৫ টাকা + ১৫০ কয়েন।\n"
+            "• ৫০০০+ কয়েন: ৩০ টাকা + ১৫০ কয়েন।\n\n"
+            "🔄 <b>কয়েন কনভার্ট:</b>\n"
+            "১০০০ কয়েন = ১০ টাকা। (৫০০০ কয়েন একাউন্টে জমা থাকা বাধ্যতামূলক)\n\n"
+            "💸 <b>উত্তোলন:</b> সর্বনিম্ন ১৫০ টাকা।"
+        )
+        await message.answer(info)
+
+    elif "🎁 ডেইলি বোনাস" in message.text:
+        today = datetime.datetime.now().strftime("%d-%m-%Y")
+        if u.get('last_bonus') == today: await message.answer("❌ অলরেডি নিয়েছেন!")
+        else:
+            fb_update(f"users/{uid}", {"coins": u.get('coins', 0)+10, "last_bonus": today})
+            await message.answer("✅ ১০ কয়েন বোনাস পেয়েছেন।")
+
+# --- ৮. অ্যাপ্রুভ ও রেফার বোনাস লজিক ---
+@dp.callback_query_handler(lambda c: c.data.startswith('approve_'))
+async def approve_pay(call: types.CallbackQuery):
+    tid = call.data.split('_')[1]
+    fb_update(f"users/{tid}", {"status": "active"})
+    user = fb_get(f"users/{tid}")
+    
+    if user and user.get('referred_by_id'):
+        rid = user['referred_by_id']
+        rd = fb_get(f"users/{rid}")
+        if rd:
+            u_coins = rd.get('coins', 0)
+            # লেভেল অনুযায়ী ইনকাম (২০, ২৫, ৩০ টাকা)
+            ref_money = 20.0
+            if u_coins >= 5000: ref_money = 30.0
+            elif u_coins >= 3000: ref_money = 25.0
+            
+            # প্রতি রেফারে ১৫০ কয়েন ফিক্সড
+            fb_update(f"users/{rid}", {
+                "balance": rd.get('balance', 0.0) + ref_money, 
+                "coins": u_coins + 150, 
+                "total_refer": rd.get('total_refer', 0) + 1,
+                "total_earned": rd.get('total_earned', 0.0) + ref_money
+            })
+            try: await bot.send_message(rid, f"🎊 রেফার সফল! আপনি {bn_num(ref_money)} টাকা ও ১৫০ কয়েন বোনাস পেয়েছেন।")
+            except: pass
+                
+    await bot.send_message(tid, "✅ অভিনন্দন! অ্যাকাউন্ট সক্রিয় হয়েছে।", reply_markup=main_menu())
+    await call.message.edit_text(f"✅ আইডি {tid} এপ্রুভড।")
+
+# --- ৯. উইথড্র ও পেমেন্ট রিকোয়েস্ট ---
+@dp.callback_query_handler(lambda c: c.data == 'submit_pay', state="*")
+async def pay_click(call: types.CallbackQuery):
+    await Form.waiting_for_pay_num.set()
+    await call.message.answer("📱 নম্বরটি লিখুন:")
+    await call.answer()
+
+@dp.message_handler(state=Form.waiting_for_pay_num)
+async def get_pay_num(message: types.Message, state: FSMContext):
+    await state.update_data(p=message.text)
+    await Form.waiting_for_trx_id.set()
+    await message.answer("🆔 TrxID লিখুন:")
+
+@dp.message_handler(state=Form.waiting_for_trx_id)
+async def get_trx(message: types.Message, state: FSMContext):
+    data = await state.get_data(); uid = str(message.from_user.id)
+    u = fb_get(f"users/{uid}")
+    kb = InlineKeyboardMarkup().add(InlineKeyboardButton("✅ Approve", callback_data=f"approve_{uid}"), InlineKeyboardButton("❌ Reject", callback_data=f"reject_{uid}"))
+    await bot.send_message(ADMIN_ID, f"🔔 পেমেন্ট রিকোয়েস্ট\n👤 {u['name']}\n📱 {data['p']}\n🆔 {message.text}", reply_markup=kb)
+    await message.answer("⌛ অ্যাডমিন চেক করে এপ্রুভ করবেন।")
+    await state.finish()
+
+# উইথড্র প্রসেস
+@dp.callback_query_handler(lambda c: c.data.startswith('w_'), state="*")
+async def w_method(call: types.CallbackQuery, state: FSMContext):
+    await state.update_data(m=call.data.split('_')[1])
+    await Form.waiting_for_withdraw_num.set()
+    await call.message.edit_text("✅ আপনার নম্বরটি লিখুন:")
+
+@dp.message_handler(state=Form.waiting_for_withdraw_num)
+async def w_process(message: types.Message, state: FSMContext):
+    data = await state.get_data(); uid = str(message.from_user.id)
+    u = fb_get(f"users/{uid}"); amount = u['balance']
+    fb_update(f"users/{uid}", {"balance": 0.0, "total_withdrawn": u.get('total_withdrawn', 0) + amount})
+    await bot.send_message(ADMIN_ID, f"💸 উইথড্র আবেদন!\nআইডি: {uid}\nপরিমাণ: {amount} টাকা\nমেথড: {data['m']}\nনম্বর: {message.text}")
+    await message.answer(f"✅ আবেদন জমা হয়েছে।", reply_markup=main_menu())
+    await state.finish()
+
+# স্টার্ট কমান্ড
+@dp.message_handler(commands=['start'], state="*")
+async def start(message: types.Message, state: FSMContext):
+    await state.finish()
+    uid = str(message.from_user.id)
+    user = fb_get(f"users/{uid}")
+    if not user:
+        user_data = {"name": message.from_user.full_name, "status": "pending", "balance": 0.0, "coins": 0, "total_refer": 0, "referred_by_id": message.get_args() if message.get_args().isdigit() else None}
+        fb_put(f"users/{uid}", user_data)
+        user = user_data
+    if user['status'] == 'pending':
+        kb = InlineKeyboardMarkup().add(InlineKeyboardButton("✅ পেমেন্ট করেছি", callback_data="submit_pay"))
+        await message.answer(f"অ্যাকাউন্ট একটিভ করতে ৫০ টাকা Send Money করুন। নম্বর: {PAYMENT_NUMBER}", reply_markup=kb)
+    else: await message.answer("স্বাগতম!", reply_markup=main_menu())
 
 if __name__ == '__main__':
     keep_alive()
