@@ -78,7 +78,7 @@ def admin_keyboard():
     keyboard.row(KeyboardButton("🏠 মেইন মেনু"))
     return keyboard
 
-# --- ৬. অ্যাডমিন প্যানেল (শুধুমাত্র নোটিশ) ---
+# --- ৬. অ্যাডমিন হ্যান্ডলার ---
 @dp.message_handler(lambda m: m.from_user.id == ADMIN_ID, commands=['admin'], state="*")
 async def admin_panel(message: types.Message, state: FSMContext):
     await state.finish()
@@ -89,16 +89,13 @@ async def admin_logic(message: types.Message, state: FSMContext):
     if "📢 আপডেট পাঠান" in message.text:
         await Form.waiting_for_notice.set()
         await message.answer("📝 একটি নোটিশ লিখুন যা সবার কাছে পৌঁছাবে:")
-
     elif "📊 ড্যাশবোর্ড" in message.text:
         users = fb_get("users") or {}
         active = sum(1 for u in users.values() if u.get('status')=='active')
         msg = f"📊 <b>লাইভ ড্যাশবোর্ড</b>\n👥 মোট ইউজার: {bn_num(len(users))}\n✅ একটিভ ইউজার: {bn_num(active)}"
         await message.answer(msg)
-
     elif "🏠 মেইন মেনু" in message.text:
         await message.answer("🏠 মেইন মেনু", reply_markup=main_menu())
-    
     else:
         await user_panel_logic(message, state)
 
@@ -117,7 +114,7 @@ async def process_notice(message: types.Message, state: FSMContext):
         except: pass
     await message.answer(f"✅ সফলভাবে {bn_num(count)} জনের কাছে নোটিশ পাঠানো হয়েছে।", reply_markup=admin_keyboard())
 
-# --- ৭. ইউজার প্যানেল ও কনভার্ট লজিক ---
+# --- ৭. ইউজার প্যানেল ও কনভার্ট অ্যালগরিদম ---
 async def user_panel_logic(message: types.Message, state: FSMContext):
     uid = str(message.from_user.id)
     u = fb_get(f"users/{uid}")
@@ -135,14 +132,13 @@ async def user_panel_logic(message: types.Message, state: FSMContext):
     elif "🔄 কয়েন কনভার্ট" in message.text:
         current_coins = u.get('coins', 0)
         if current_coins < 6000:
-            await message.answer("❌ আপনার একাউন্টে ৫০০০ কয়েন লেভেল বোনাসের জন্য জমা থাকা বাধ্যতামূলক। ৫০০০ এর উপরে প্রতি ১০০০ কয়েন হলে ১০ টাকা কনভার্ট করতে পারবেন।")
+            await message.answer("❌ আপনার একাউন্টে ৫০০০ কয়েন জমা থাকা বাধ্যতামূলক। ৫০০০ এর উপরে প্রতি ১০০০ কয়েন হলে ১০ টাকা কনভার্ট করতে পারবেন।")
         else:
             convertible = (current_coins - 5000) // 1000 * 1000
             money = (convertible // 1000) * 10
             fb_update(f"users/{uid}", {
                 "balance": u['balance'] + money, 
-                "coins": current_coins - convertible,
-                "total_earned": u.get('total_earned', 0.0) + money
+                "coins": current_coins - convertible
             })
             await message.answer(f"✅ {bn_num(convertible)} কয়েন কনভার্ট করে {bn_num(money)} টাকা ব্যালেন্সে যোগ করা হয়েছে।")
 
@@ -151,21 +147,14 @@ async def user_panel_logic(message: types.Message, state: FSMContext):
             "ℹ️ <b>ইনকাম ও লেভেল সিস্টেম</b>\n"
             "━━━━━━━━━━━━━━━━━━\n"
             "💰 <b>রেফার ইনকাম:</b>\n"
-            "• ০-২৯৯৯ কয়েন: ২০ টাকা + ১৫০ কয়েন।\n"
-            "• ৩০০০-৪৯৯৯ কয়েন: ২৫ টাকা + ১৫০ কয়েন।\n"
-            "• ৫০০০+ কয়েন: ৩০ টাকা + ১৫০ কয়েন।\n\n"
+            "• ০-২৯৯৯ কয়েন: ২০ টাকা + ১৫০ কয়েন\n"
+            "• ৩০০০-৪৯৯৯ কয়েন: ২৫ টাকা + ১৫০ কয়েন\n"
+            "• ৫০০০+ কয়েন: ৩০ টাকা + ১৫০ কয়েন\n\n"
             "🔄 <b>কয়েন কনভার্ট:</b>\n"
-            "১০০০ কয়েন = ১০ টাকা। (৫০০০ কয়েন একাউন্টে জমা থাকা বাধ্যতামূলক)\n\n"
+            "১০০০ কয়েন = ১০ টাকা (৫০০০ কয়েন একাউন্টে জমা থাকা বাধ্যতামূলক)\n\n"
             "💸 <b>উত্তোলন:</b> সর্বনিম্ন ১৫০ টাকা।"
         )
         await message.answer(info)
-
-    elif "🎁 ডেইলি বোনাস" in message.text:
-        today = datetime.datetime.now().strftime("%d-%m-%Y")
-        if u.get('last_bonus') == today: await message.answer("❌ অলরেডি নিয়েছেন!")
-        else:
-            fb_update(f"users/{uid}", {"coins": u.get('coins', 0)+10, "last_bonus": today})
-            await message.answer("✅ ১০ কয়েন বোনাস পেয়েছেন।")
 
 # --- ৮. অ্যাপ্রুভ ও রেফার বোনাস লজিক ---
 @dp.callback_query_handler(lambda c: c.data.startswith('approve_'))
@@ -173,31 +162,26 @@ async def approve_pay(call: types.CallbackQuery):
     tid = call.data.split('_')[1]
     fb_update(f"users/{tid}", {"status": "active"})
     user = fb_get(f"users/{tid}")
-    
     if user and user.get('referred_by_id'):
         rid = user['referred_by_id']
         rd = fb_get(f"users/{rid}")
         if rd:
             u_coins = rd.get('coins', 0)
-            # লেভেল অনুযায়ী ইনকাম (২০, ২৫, ৩০ টাকা)
             ref_money = 20.0
             if u_coins >= 5000: ref_money = 30.0
             elif u_coins >= 3000: ref_money = 25.0
             
-            # প্রতি রেফারে ১৫০ কয়েন ফিক্সড
             fb_update(f"users/{rid}", {
                 "balance": rd.get('balance', 0.0) + ref_money, 
-                "coins": u_coins + 150, 
-                "total_refer": rd.get('total_refer', 0) + 1,
-                "total_earned": rd.get('total_earned', 0.0) + ref_money
+                "coins": u_coins + 150, # ১৫০ কয়েন রেফার বোনাস
+                "total_refer": rd.get('total_refer', 0) + 1
             })
             try: await bot.send_message(rid, f"🎊 রেফার সফল! আপনি {bn_num(ref_money)} টাকা ও ১৫০ কয়েন বোনাস পেয়েছেন।")
             except: pass
-                
     await bot.send_message(tid, "✅ অভিনন্দন! অ্যাকাউন্ট সক্রিয় হয়েছে।", reply_markup=main_menu())
     await call.message.edit_text(f"✅ আইডি {tid} এপ্রুভড।")
 
-# --- ৯. উইথড্র ও পেমেন্ট রিকোয়েস্ট ---
+# --- ৯. পেমেন্ট ও স্টার্ট (সংক্ষিপ্ত) ---
 @dp.callback_query_handler(lambda c: c.data == 'submit_pay', state="*")
 async def pay_click(call: types.CallbackQuery):
     await Form.waiting_for_pay_num.set()
@@ -219,23 +203,6 @@ async def get_trx(message: types.Message, state: FSMContext):
     await message.answer("⌛ অ্যাডমিন চেক করে এপ্রুভ করবেন।")
     await state.finish()
 
-# উইথড্র প্রসেস
-@dp.callback_query_handler(lambda c: c.data.startswith('w_'), state="*")
-async def w_method(call: types.CallbackQuery, state: FSMContext):
-    await state.update_data(m=call.data.split('_')[1])
-    await Form.waiting_for_withdraw_num.set()
-    await call.message.edit_text("✅ আপনার নম্বরটি লিখুন:")
-
-@dp.message_handler(state=Form.waiting_for_withdraw_num)
-async def w_process(message: types.Message, state: FSMContext):
-    data = await state.get_data(); uid = str(message.from_user.id)
-    u = fb_get(f"users/{uid}"); amount = u['balance']
-    fb_update(f"users/{uid}", {"balance": 0.0, "total_withdrawn": u.get('total_withdrawn', 0) + amount})
-    await bot.send_message(ADMIN_ID, f"💸 উইথড্র আবেদন!\nআইডি: {uid}\nপরিমাণ: {amount} টাকা\nমেথড: {data['m']}\nনম্বর: {message.text}")
-    await message.answer(f"✅ আবেদন জমা হয়েছে।", reply_markup=main_menu())
-    await state.finish()
-
-# স্টার্ট কমান্ড
 @dp.message_handler(commands=['start'], state="*")
 async def start(message: types.Message, state: FSMContext):
     await state.finish()
@@ -247,7 +214,7 @@ async def start(message: types.Message, state: FSMContext):
         user = user_data
     if user['status'] == 'pending':
         kb = InlineKeyboardMarkup().add(InlineKeyboardButton("✅ পেমেন্ট করেছি", callback_data="submit_pay"))
-        await message.answer(f"অ্যাকাউন্ট একটিভ করতে ৫০ টাকা Send Money করুন। নম্বর: {PAYMENT_NUMBER}", reply_markup=kb)
+        await message.answer(f"পেমেন্ট নম্বর: {PAYMENT_NUMBER}", reply_markup=kb)
     else: await message.answer("স্বাগতম!", reply_markup=main_menu())
 
 if __name__ == '__main__':
