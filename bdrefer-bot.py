@@ -12,7 +12,7 @@ from aiogram.dispatcher import FSMContext
 from aiogram.dispatcher.filters.state import State, StatesGroup
 from aiogram.contrib.fsm_storage.memory import MemoryStorage
 
-# --- ১. সার্ভার কিপ-অ্যালাইভ (Render-এর জন্য) ---
+# --- ১. সার্ভার কিপ-অ্যালাইভ ---
 app = Flask('')
 @app.route('/')
 def home(): return "LuckyHera Bot is Online!"
@@ -79,25 +79,30 @@ def admin_keyboard():
     keyboard.row(KeyboardButton("🏠 মেইন মেনু"))
     return keyboard
 
-# --- ৬. অ্যাডমিন লজিক ---
+def update_menu():
+    keyboard = ReplyKeyboardMarkup(resize_keyboard=True)
+    keyboard.row(KeyboardButton("📝 সাধারণ নোটিশ"), KeyboardButton("🎯 নতুন টাস্ক"))
+    keyboard.row(KeyboardButton("🔙 পিছনে যান"))
+    return keyboard
+
+# --- ৬. অ্যাডমিন কমান্ড ও অ্যাকশন ---
 @dp.message_handler(lambda m: m.from_user.id == ADMIN_ID, commands=['admin'], state="*")
 async def admin_panel(message: types.Message, state: FSMContext):
     await state.finish()
-    await message.answer("🛠 <b>অ্যাডমিন প্যানেল সচল।</b>", reply_markup=admin_keyboard())
+    await message.answer("🛠 <b>অ্যাডমিন কন্ট্রোল মোড অ্যাক্টিভ।</b>", reply_markup=admin_keyboard())
 
 @dp.message_handler(lambda m: m.from_user.id == ADMIN_ID, state="*")
 async def admin_logic(message: types.Message, state: FSMContext):
     if "📢 আপডেট পাঠান" in message.text:
-        kb = ReplyKeyboardMarkup(resize_keyboard=True).row("📝 সাধারণ নোটিশ", "🎯 নতুন টাস্ক").add("🔙 পিছনে যান")
-        await message.answer("কোন ধরনের আপডেট পাঠাতে চান?", reply_markup=kb)
+        await message.answer("কোন ধরনের আপডেট পাঠাতে চান?", reply_markup=update_menu())
     
     elif "📝 সাধারণ নোটিশ" in message.text:
         await Form.waiting_for_notice.set()
-        await message.answer("📝 নোটিশের লেখাটি পাঠান:")
+        await message.answer("📝 নোটিশের লেখাটি পাঠান (এটি সরাসরি সবার ইনবক্সে যাবে):")
 
     elif "🎯 নতুন টাস্ক" in message.text:
         await Form.waiting_for_task_msg.set()
-        await message.answer("🎯 টাস্কের বিস্তারিত (লিঙ্কসহ) লিখুন:\n(ইউজার সম্পন্ন করলে ১০ কয়েন পাবে)")
+        await message.answer("🎯 টাস্কের বিস্তারিত (লিঙ্কসহ) লিখুন:\n(ইউজার বাটন ক্লিক করলে ১০ কয়েন পাবে)")
 
     elif "📊 ড্যাশবোর্ড" in message.text:
         users = fb_get("users") or {}
@@ -108,17 +113,24 @@ async def admin_logic(message: types.Message, state: FSMContext):
         await message.answer("🏠 মেইন মেনু", reply_markup=main_menu())
     
     else:
-        await user_panel_logic(message)
+        # অ্যাডমিন যাতে ইউজার প্যানেলও ব্যবহার করতে পারে
+        await user_panel_logic(message, state)
 
-# --- ৭. টাস্ক ও নোটিশ ব্রডকাস্ট ---
+# --- ৭. নোটিশ ও টাস্ক ব্রডকাস্ট প্রসেসর ---
 @dp.message_handler(state=Form.waiting_for_notice)
 async def process_notice(message: types.Message, state: FSMContext):
+    notice_text = message.text
     await state.finish()
     users = fb_get("users") or {}
+    await message.answer("⏳ সবার কাছে নোটিশ পাঠানো হচ্ছে...")
+    count = 0
     for uid in users:
-        try: await bot.send_message(uid, f"📢 <b>নতুন নোটিশ:</b>\n\n{message.text}")
+        try:
+            await bot.send_message(uid, f"📢 <b>নতুন আপডেট:</b>\n\n{notice_text}")
+            count += 1
+            await asyncio.sleep(0.05) # সার্ভার লোড কমাতে
         except: pass
-    await message.answer("✅ নোটিশ পাঠানো সফল হয়েছে।", reply_markup=admin_keyboard())
+    await message.answer(f"✅ সফলভাবে {bn_num(count)} জনের কাছে নোটিশ পাঠানো হয়েছে।", reply_markup=admin_keyboard())
 
 @dp.message_handler(state=Form.waiting_for_task_msg)
 async def process_task(message: types.Message, state: FSMContext):
@@ -128,54 +140,43 @@ async def process_task(message: types.Message, state: FSMContext):
     task_id = datetime.datetime.now().strftime("%H%M%S")
     kb = InlineKeyboardMarkup().add(InlineKeyboardButton("✅ সম্পন্ন করেছি (১০ কয়েন)", callback_data=f"done_{task_id}"))
     
+    await message.answer("⏳ সবার কাছে টাস্ক পাঠানো হচ্ছে...")
     count = 0
     for uid in users:
         try:
             await bot.send_message(uid, f"🎯 <b>নতুন টাস্ক!</b>\n\n{task_text}\n\n💰 রিওয়ার্ড: ১০ কয়েন", reply_markup=kb)
             count += 1
+            await asyncio.sleep(0.05)
         except: pass
     await message.answer(f"✅ সফলভাবে {bn_num(count)} জনের কাছে টাস্ক পাঠানো হয়েছে।", reply_markup=admin_keyboard())
 
-# --- ৮. ইউজার প্যানেল ও ইনকাম লেভেল সিস্টেম ---
-@dp.message_handler()
-async def user_panel_logic(message: types.Message):
+# --- ৮. ইউজার প্যানেল লজিক ---
+async def user_panel_logic(message: types.Message, state: FSMContext):
     uid = str(message.from_user.id)
     u = fb_get(f"users/{uid}")
     if not u or u.get('status') == 'pending': return
 
     if "📊 আমার প্রোফাইল" in message.text:
-        msg = (f"📊 <b>আপনার প্রোফাইল</b>\n━━━━━━━━━━━━━━\n👤 নাম: {u['name']}\n💰 ব্যালেন্স: {bn_num(u['balance'])} টাকা\n"
-               f"🎯 কয়েন: {bn_num(u['coins'])}\n👥 রেফার: {bn_num(u['total_refer'])} জন")
+        bot_info = await bot.get_me()
+        ref_link = f"https://t.me/{bot_info.username}?start={uid}"
+        msg = (f"📊 <b>আপনার প্রোফাইল</b>\n━━━━━━━━━━━━━━\n👤 নাম: {u['name']}\n🆔 আইডি: <code>{uid}</code>\n"
+               f"💰 ব্যালেন্স: {bn_num(u['balance'])} টাকা\n🎯 কয়েন: {bn_num(u['coins'])}\n"
+               f"👥 মোট রেফার: {bn_num(u['total_refer'])} জন\n━━━━━━━━━━━━━━\n"
+               f"🔗 <b>রেফার লিংক:</b>\n{ref_link}")
         await message.answer(msg)
 
     elif "🔄 কয়েন কনভার্ট" in message.text:
-        if u['coins'] < 1000:
-            await message.answer("❌ কনভার্ট করতে কমপক্ষে ১০০০ কয়েন প্রয়োজন।")
+        current_coins = u.get('coins', 0)
+        if current_coins < 6000:
+            await message.answer("❌ লেভেল আপগ্রেডের জন্য ৫০০০ কয়েন জমা থাকা বাধ্যতামূলক। ৫০০০ এর উপরে প্রতি ১০০০ কয়েন হলে ১০ টাকা কনভার্ট করতে পারবেন।")
         else:
-            money_to_add = (u['coins'] // 1000) * 10 
-            coins_to_cut = (u['coins'] // 1000) * 1000
-            fb_update(f"users/{uid}", {
-                "balance": u['balance'] + money_to_add, 
-                "coins": u['coins'] - coins_to_cut,
-                "total_earned": u.get('total_earned', 0.0) + money_to_add
-            })
-            await message.answer(f"✅ {bn_num(coins_to_cut)} কয়েন কনভার্ট করে {bn_num(money_to_add)} টাকা পেয়েছেন।")
+            convertible = (current_coins - 5000) // 1000 * 1000
+            money = (convertible // 1000) * 10
+            fb_update(f"users/{uid}", {"balance": u['balance'] + money, "coins": current_coins - convertible})
+            await message.answer(f"✅ {bn_num(convertible)} কয়েন কনভার্ট করে {bn_num(money)} টাকা পেয়েছেন।")
 
     elif "ℹ️ ইনকাম তথ্য" in message.text:
-        info = (
-            "ℹ️ <b>ইনকাম তথ্য ও লেভেল সিস্টেম</b>\n"
-            "━━━━━━━━━━━━━━━━━━\n"
-            "💰 <b>রেফারেল ইনকাম (৩টি লেভেল):</b>\n"
-            "১. প্রাথমিক লেভেল: ২০ টাকা + ১৫০ কয়েন।\n"
-            "২. ৩০০০ কয়েন হলে: ২৫ টাকা + ১৫০ কয়েন।\n"
-            "৩. ৫০০০ কয়েন হলে: ৩০ টাকা + ১৫০ কয়েন।\n\n"
-            "🎯 <b>টাস্ক ইনকাম:</b> প্রতি টাস্কে ১০ কয়েন।\n"
-            "🎁 <b>ডেইলি বোনাস:</b> ১০ কয়েন।\n\n"
-            "🔄 <b>কয়েন কনভার্ট রেট:</b>\n"
-            "১০০০ কয়েন = ১০ টাকা।\n\n"
-            "💸 <b>সর্বনিম্ন উত্তোলন:</b> ১৫০ টাকা।\n"
-            "━━━━━━━━━━━━━━━━━━"
-        )
+        info = "ℹ️ <b>ইনকাম পলিসি</b>\n• ৫০০০ কয়েন লেভেল বোনাস লক থাকবে।\n• এরপর প্রতি ১০০০ কয়েন = ১০ টাকা।\n• প্রতি টাস্ক = ১০ কয়েন।"
         await message.answer(info)
 
     elif "🎁 ডেইলি বোনাস" in message.text:
@@ -185,46 +186,7 @@ async def user_panel_logic(message: types.Message):
             fb_update(f"users/{uid}", {"coins": u.get('coins', 0)+10, "last_bonus": today})
             await message.answer("✅ ১০ কয়েন বোনাস পেয়েছেন।")
 
-    elif "💸 টাকা উত্তোলন" in message.text:
-        if u['balance'] < MIN_WITHDRAW: await message.answer(f"❌ ব্যালেন্স {bn_num(MIN_WITHDRAW)} টাকার কম।")
-        else:
-            kb = InlineKeyboardMarkup().row(InlineKeyboardButton("🟠 বিকাশ", callback_data="w_Bikash"), InlineKeyboardButton("🔴 নগদ", callback_data="w_Nagad"))
-            await message.answer(f"💰 ব্যালেন্স: {bn_num(u['balance'])} টাকা। মেথড সিলেক্ট করুন:", reply_markup=kb)
-
-    elif "📞 কাস্টমার সাপোর্ট" in message.text:
-        await message.answer(f"👨‍💻 অ্যাডমিন সাপোর্ট: {ADMIN_USERNAME}")
-
-# --- ৯. পেমেন্ট এপ্রুভাল ও লেভেল বোনাস লজিক ---
-@dp.callback_query_handler(lambda c: c.data.startswith('approve_'))
-async def approve_payment(call: types.CallbackQuery):
-    tid = call.data.split('_')[1]
-    fb_update(f"users/{tid}", {"status": "active"})
-    user = fb_get(f"users/{tid}")
-    
-    if user and user.get('referred_by_id'):
-        rid = user['referred_by_id']
-        rd = fb_get(f"users/{rid}")
-        if rd:
-            # লেভেল অনুযায়ী ইনকাম নির্ধারণ
-            ref_bonus = 20.0
-            u_coins = rd.get('coins', 0)
-            if u_coins >= 5000: ref_bonus = 30.0
-            elif u_coins >= 3000: ref_bonus = 25.0
-            
-            fb_update(f"users/{rid}", {
-                "balance": rd.get('balance', 0.0) + ref_bonus, 
-                "coins": u_coins + 150, 
-                "total_refer": rd.get('total_refer', 0) + 1, 
-                "total_earned": rd.get('total_earned', 0.0) + ref_bonus
-            })
-            try: await bot.send_message(rid, f"🎊 রেফার সফল! আপনি {bn_num(ref_bonus)} টাকা ও ১৫০ কয়েন পেয়েছেন।")
-            except: pass
-                
-    await bot.send_message(tid, "✅ অভিনন্দন! অ্যাকাউন্ট সক্রিয় হয়েছে।", reply_markup=main_menu())
-    await call.message.edit_text(f"✅ আইডি {tid} এপ্রুভড।")
-    await call.answer()
-
-# --- ১০. টাস্ক বোনাস ও উইথড্র কলব্যাকস ---
+# --- ৯. পেমেন্ট ও টাস্ক কলব্যাক ---
 @dp.callback_query_handler(lambda c: c.data.startswith('done_'))
 async def task_done(call: types.CallbackQuery):
     task_id = call.data.split('_')[1]
@@ -238,42 +200,16 @@ async def task_done(call: types.CallbackQuery):
         fb_update(f"users/{uid}", {"coins": u.get('coins', 0) + 10})
         history.append(task_id)
         fb_put(f"task_history/{uid}", history)
-        await call.message.edit_text(f"✅ <b>টাস্ক সফল!</b> আপনি ১০ কয়েন বোনাস পেয়েছেন।")
+        await call.message.edit_text(f"✅ <b>টাস্ক সফল!</b> ১০ কয়েন জমা হয়েছে।")
     await call.answer()
 
-# পেমেন্ট রিকোয়েস্ট সাবমিট
-@dp.callback_query_handler(lambda c: c.data == 'submit_pay', state="*")
-async def pay_click(call: types.CallbackQuery):
-    await Form.waiting_for_pay_num.set()
-    await call.message.answer("📱 নম্বরটি লিখুন:")
-    await call.answer()
-
-@dp.message_handler(state=Form.waiting_for_pay_num)
-async def get_pay_num(message: types.Message, state: FSMContext):
-    await state.update_data(p=message.text)
-    await Form.waiting_for_trx_id.set()
-    await message.answer("🆔 TrxID লিখুন:")
-
-@dp.message_handler(state=Form.waiting_for_trx_id)
-async def get_trx(message: types.Message, state: FSMContext):
-    data = await state.get_data(); uid = str(message.from_user.id)
-    u = fb_get(f"users/{uid}")
-    kb = InlineKeyboardMarkup().add(InlineKeyboardButton("✅ Approve", callback_data=f"approve_{uid}"), InlineKeyboardButton("❌ Reject", callback_data=f"reject_{uid}"))
-    await bot.send_message(ADMIN_ID, f"🔔 পেমেন্ট রিকোয়েস্ট\n👤 {u['name']}\n📱 {data['p']}\n🆔 {message.text}", reply_markup=kb)
-    await message.answer("⌛ অ্যাডমিন চেক করে এপ্রুভ করবেন।")
-    await state.finish()
-
-# স্টার্ট কমান্ড
 @dp.message_handler(commands=['start'], state="*")
 async def start(message: types.Message, state: FSMContext):
     await state.finish()
     uid = str(message.from_user.id)
     user = fb_get(f"users/{uid}")
     if not user:
-        user_data = {
-            "name": message.from_user.full_name, "status": "pending", "balance": 0.0, "coins": 0, "total_refer": 0,
-            "referred_by_id": message.get_args() if message.get_args().isdigit() else None
-        }
+        user_data = {"name": message.from_user.full_name, "status": "pending", "balance": 0.0, "coins": 0, "total_refer": 0, "referred_by_id": message.get_args() if message.get_args().isdigit() else None}
         fb_put(f"users/{uid}", user_data)
         user = user_data
     
